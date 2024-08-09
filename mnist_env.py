@@ -1,3 +1,6 @@
+# Deprecated. Decided to just create a dataloader instead of
+# creating an environment since it's overkill for testing
+
 from typing import Any, Dict, Optional, Tuple, Union
 
 
@@ -54,7 +57,7 @@ class EnvParams(environment.EnvParams):
     min_action: float = -1.0
     max_action: float = 1.0
     img_shape: Tuple[int, int] = (28, 28)
-    max_steps_in_episode: int = 1
+    max_steps_in_episode: int = 2
 
 
 class MNISTOneStep(environment.Environment[EnvState, EnvParams]):
@@ -80,9 +83,12 @@ class MNISTOneStep(environment.Environment[EnvState, EnvParams]):
         action: chex.Array,
         params: EnvParams,
     ) -> Tuple[chex.Array, EnvState, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
-        """Perform single timestep state transition based on MNIST transition rules."""
+        """Perform single timestep state transition based on MNIST transition rules.
+        
+        Since gymnax auto-resets the env and we require the last obs, we actually do 2 steps.
+        """
         next_label = lax.select(
-            jnp.equal(state.label, 0),
+            state.label == 0,
             0,
             jax.random.choice(key, jnp.arange(2, 10))
         )
