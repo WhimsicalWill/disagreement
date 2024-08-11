@@ -13,6 +13,8 @@ class DigitToDigit(nn.Module):
         x = x.reshape((x.shape[0], -1))  # Flatten the input
         x = nn.Dense(self.hidden_dim)(x)
         x = nn.relu(x)
-        x = nn.Dense(self.output_dim)(x)
+        x = nn.Dense(self.hidden_dim)(x)
         x = nn.relu(x)
+        x = nn.Dense(self.output_dim)(x)
+        x = nn.tanh(x)
         return x.reshape((-1, 28, 28))  # Reshape back to image dimensions
