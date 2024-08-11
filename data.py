@@ -1,12 +1,13 @@
 from typing import Any, Dict, Optional, Tuple, Union
 import jax
 import jax.numpy as jnp
+import numpy as np
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 import torch
 
 
-MAX_SAMPLES_PER_CLASS = 100
+MAX_SAMPLES_PER_CLASS = 3000
 
 def load_mnist() -> jnp.ndarray:
     """Loads the MNIST dataset into a structured JAX array.
@@ -45,10 +46,9 @@ class MNISTOneStep(Dataset):
     In shape comments, I use N to represent MAX_SAMPLES_PER_CLASS
     '''
 
-    def __init__(self, shuffle=True):
+    def __init__(self):
         self.data_array = load_mnist()  # MNIST data array of shape (10, N, 28, 28)
         self.rng = jax.random.PRNGKey(42)
-        self.shuffle = shuffle
         self.pairs = self.prepare_pairs()
 
     def prepare_pairs(self):
@@ -75,12 +75,9 @@ class MNISTOneStep(Dataset):
         paired_images = fetch_image_vmap(paired_digits, digit_indices)  # (N // 2, 28, 28)
         one_pairs = jnp.stack([ones, paired_images], axis=1)
 
-        # Concatenate all pairs
+        # Concatenate the 0 digit and 1 digit pairs
         pairs = jnp.concatenate([zero_pairs, one_pairs], axis=0)  # (N, 2, 28, 28)
-        if self.shuffle:
-            self.rng, subkey = jax.random.split(self.rng)
-            pairs = pairs[jax.random.permutation(subkey, pairs.shape[0])]
-        return pairs
+        return np.array(pairs)  # Convert to np.array to conform to torch Dataset interface
 
     def __len__(self):
         return self.pairs.shape[0]

@@ -1,59 +1,54 @@
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import datasets, transforms
 import jax
 import jax.numpy as jnp
 from flax.training import train_state
 import optax
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from model import DigitToDigit
 from data import MNISTOneStep
 
 
-mnist_onestep = MNISTOneStep(shuffle=True)
-print(f"{mnist_onestep=}")
+def create_train_state(rng_key, learning_rate):
+    model = DigitToDigit(hidden_dim=128)
+    params = model.init(rng_key, jnp.ones([1, 28, 28]))['params']
+    tx = optax.adam(learning_rate)
+    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
-# # Define the ensemble size
-# ENSEMBLE_SIZE = 5
+def mse_loss(params, apply_fn, inputs, targets):
+    preds = apply_fn({'params': params}, inputs)
+    return jnp.mean((preds - targets) ** 2)
 
-# # Initialize the ensemble of models
-# ensemble_models = [MLP(hidden_dim=128, out_dim=28*28) for _ in range(ENSEMBLE_SIZE)]
-# ensemble_params = [model.init(jax.random.PRNGKey(i), x1) for i, model in enumerate(ensemble_models)]
+def train_step(state, inputs, targets):
+    # TODO: change this to value and grad so that we can track the loss and its gradient over time
+    # We will use matplotlib to plot these quantities over the training steps
+    grads = jax.grad(mse_loss, argnums=0)(state.params, state.apply_fn, inputs, targets)
+    return state.apply_gradients(grads=grads)
 
-# def compute_nll_loss(predicted, target):
-#     return 0.5 * jnp.mean((predicted - target) ** 2)
+def intrinsic_reward(ensemble, inputs):
+    predictions = [state.apply_fn({'params': state.params}, inputs) for state in ensemble]
+    variance = jnp.var(jnp.stack(predictions), axis=0)
+    return jnp.mean(variance)
 
-# def compute_intrinsic_reward(predictions):
-#     means = jnp.stack(predictions, axis=0)
-#     variance = jnp.var(means, axis=0)
-#     intrinsic_reward = jnp.mean(variance)
-#     return intrinsic_reward
 
-# # Initialize optimizer
-# optimizer = optax.adam(learning_rate=1e-3)
+dataset = MNISTOneStep()
+data_loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-# # Create a training state for each model
-# train_states = [train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer) 
-#                 for model, params in zip(ensemble_models, ensemble_params)]
+# Training Loop
+num_epochs = 10
+lr = 1e-3
+ensemble_size = 5
 
-# def train_step(state, batch):
-#     def loss_fn(params):
-#         predictions = state.apply_fn({'params': params}, batch['image'])
-#         loss = compute_nll_loss(predictions, batch['next_image'])
-#         return loss, predictions
+# Initialize ensemble of bootstraps
+ensemble = [create_train_state(jax.random.PRNGKey(i), lr) for i in range(ensemble_size)]
 
-#     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-#     (loss, predictions), grads = grad_fn(state.params)
-#     state = state.apply_gradients(grads=grads)
-#     return state, loss, predictions
+for epoch in tqdm(range(num_epochs), desc='Epochs'):
+    for batch in tqdm(data_loader, desc='Batches', leave=False):
+        inputs = jnp.array(batch[:, 0, :, :])
+        targets = jnp.array(batch[:, 1, :, :])
+        for i, train_state in enumerate(ensemble):
+            ensemble[i] = train_step(train_state, inputs, targets)
 
-# # Example training loop
-# for epoch in range(num_epochs):
-#     for batch in data_loader:
-#         # Train each model in the ensemble
-#         predictions = []
-#         for i in range(ENSEMBLE_SIZE):
-#             train_states[i], loss, prediction = train_step(train_states[i], batch)
-#             predictions.append(prediction)
-
-#         # Compute intrinsic reward
-#         intrinsic_reward = compute_intrinsic_reward(predictions)
-#         print(f"Epoch {epoch}, Intrinsic Reward: {intrinsic_reward}")
+    # Compute intrinsic reward
+    sample_inputs = inputs  # Using the first sample of the last batch as an example
+    reward = intrinsic_reward(ensemble, sample_inputs)
+    print(f'Epoch {epoch+1}, Intrinsic Reward: {reward}')
