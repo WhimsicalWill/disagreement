@@ -5,10 +5,11 @@ import numpy as np
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset
 import torch
+from functools import cached_property
 
 
 # How many samples to use from each digit class of MNIST (Note: must be even)
-MAX_SAMPLES_PER_CLASS = 1000
+MAX_SAMPLES_PER_CLASS = 5000
 
 def load_mnist() -> jnp.ndarray:
     """Loads the MNIST dataset into a structured JAX array.
@@ -66,15 +67,10 @@ class MNISTOneStep(Dataset):
         # Random digits from 2-9
         paired_digits = jax.random.randint(subkey, (MAX_SAMPLES_PER_CLASS // 2,), 2, 10) # (N // 2,)
         # Random indices within the digit classes
-        digit_indices = jax.random.choice(subkey, jnp.arange(MAX_SAMPLES_PER_CLASS), shape=(MAX_SAMPLES_PER_CLASS // 2,), replace=False)  # (N // 2,)
+        digit_indices = jax.random.choice(subkey, MAX_SAMPLES_PER_CLASS, shape=(MAX_SAMPLES_PER_CLASS // 2,), replace=False)  # (N // 2,)
 
-        # Fetch images using vectorized indexing
-        def fetch_image(digit, idx):
-            return self.data_array[digit][idx]
-        
-        fetch_image_vmap = jax.vmap(fetch_image, in_axes=(0, 0))
-        paired_images = fetch_image_vmap(paired_digits, digit_indices)  # (N // 2, 28, 28)
-        one_pairs = jnp.stack([ones, paired_images], axis=1)
+        paired_images = jnp.array([self.data_array[d][i] for d, i in zip(paired_digits, digit_indices)])
+        one_pairs = jnp.stack([ones, paired_images], axis=1)  # (N // 2, 2, 28, 28)
 
         # Concatenate the 0 digit and 1 digit pairs
         pairs = jnp.concatenate([zero_pairs, one_pairs], axis=0)  # (N, 2, 28, 28)
@@ -86,9 +82,16 @@ class MNISTOneStep(Dataset):
     def __getitem__(self, idx):
         return self.pairs[idx]
 
-    @property
-    def validation_batch(self, batch_size=32):
+    @cached_property
+    def validation_batch(self):
+        batch_size = 32
         zeros = self.data_array[0][:batch_size]  # (B, 28, 28)
         ones = self.data_array[1][:batch_size]  # (B, 28, 28)
         return zeros, ones
 
+    @cached_property
+    def random_batch(self):
+        batch_size = 4
+        # Randomly sample indices from the precomputed pairs
+        indices = np.random.choice(self.pairs.shape[0], size=batch_size, replace=False)
+        return self.pairs[indices]  # (B, 2, 28, 28)

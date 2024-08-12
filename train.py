@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from model import DigitToDigit
 from data import MNISTOneStep
-from utils import plot_metrics, plot_predictions
+import utils
 
 
 def create_train_state(rng_key, learning_rate):
@@ -38,8 +38,6 @@ def intrinsic_reward(ensemble_states, val_zeros, val_ones, metrics):
     We do this by comparing the uncertainty in the 1 prediction (more entropy)
     to the uncertainty in the 0 prediction (less entropy)
     '''
-    # compute the variance in predictions on the 0 digit
-    # update metrics["ir_0"]
     batch_size = val_zeros.shape[0]
     preds_zeros = jnp.zeros((len(ensemble_states), batch_size, 28, 28))
     preds_ones = jnp.zeros((len(ensemble_states), batch_size, 28, 28))
@@ -78,6 +76,7 @@ def train():
     for i in range(num_bootstraps):
         metrics[f"loss_b{i+1}"] = []
         metrics[f"grad_norms_b{i+1}"] = []
+    pred_frames = []
 
     for epoch in tqdm(range(num_epochs), desc='Epochs'):
         for batch in tqdm(data_loader, desc='Batches', leave=False):
@@ -85,9 +84,10 @@ def train():
             targets = jnp.array(batch[:, 1, :, :])
             ensemble_states, metrics = train_step(ensemble_states, inputs, targets, metrics)
             metrics = intrinsic_reward(ensemble_states, val_zeros, val_ones, metrics)
+            pred_frames = utils.generate_pred_frame(ensemble_states, pred_frames, dataset.random_batch)
 
-    plot_metrics(metrics, num_bootstraps)
-    plot_predictions(ensemble_states[i], batch)  # visualize the last batch
+    utils.plot_metrics(metrics, num_bootstraps)
+    utils.make_video(pred_frames)
 
 
 if __name__ == "__main__":

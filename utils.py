@@ -1,5 +1,8 @@
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
+import numpy as np
+from moviepy.editor import ImageSequenceClip
+
 
 def plot_metrics(metrics, num_bootstraps):
     times = range(len(metrics["loss_b1"]))
@@ -72,3 +75,45 @@ def plot_predictions(state, batch):
     plt.tight_layout()
     plt.savefig('predictions.png')
     plt.show()
+
+def generate_pred_frame(ensemble_states, pred_frames, batch):
+    S = 28
+    batch_size = batch.shape[0]
+    
+    # Extract input and target images from the batch
+    inputs = jnp.array(batch[:, 0, :, :])
+    targets = jnp.array(batch[:, 1, :, :])
+    
+    num_bootstraps = len(ensemble_states)
+    frame_width = S * (2 + num_bootstraps)  # Two columns for input and target, plus one for each bootstrap
+    frame_height = S * batch_size
+    
+    # Create an empty frame with specified dimensions
+    frame = np.zeros((frame_height, frame_width))
+    
+    # Place inputs and targets in their respective columns in the frame
+    frame[:, 0:S] = inputs.reshape(frame_height, S)
+    frame[:, S:2*S] = targets.reshape(frame_height, S)
+    
+    # Generate and insert predictions for each bootstrap
+    current_column = 2 * S
+    for state in ensemble_states:
+        preds = state.apply_fn({'params': state.params}, inputs)
+        preds_flat = preds.reshape(-1)  # Flatten the predictions
+        frame[:, current_column:current_column+S] = preds_flat.reshape(frame_height, S)
+        current_column += S
+    
+    # Append the frame to the list of prediction frames
+    pred_frames.append(frame)
+    return pred_frames
+
+def make_video(pred_frames, filename='training_video.mp4', fps=10):
+    def transform_frame(frame):
+        frame = np.uint8((frame + 1) * (255 / 2))
+        color_frame = np.stack((frame,)*3, axis=-1)  # (H, W, C)
+        return color_frame
+
+    # Ensure frames are in the correct format (HxWx3) and dtype (uint8)
+    pred_frames = [transform_frame(frame) for frame in pred_frames]
+    clip = ImageSequenceClip(pred_frames, fps=fps)
+    clip.write_videofile(filename, codec='libx264')
