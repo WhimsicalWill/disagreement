@@ -7,7 +7,8 @@ from torch.utils.data import Dataset
 import torch
 
 
-MAX_SAMPLES_PER_CLASS = 1500
+# How many samples to use from each digit class of MNIST (Note: must be even)
+MAX_SAMPLES_PER_CLASS = 1000
 
 def load_mnist() -> jnp.ndarray:
     """Loads the MNIST dataset into a structured JAX array.
@@ -90,3 +91,4 @@ class MNISTOneStep(Dataset):
         zeros = self.data_array[0][:batch_size]  # (B, 28, 28)
         ones = self.data_array[1][:batch_size]  # (B, 28, 28)
         return zeros, ones
+

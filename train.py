@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from model import DigitToDigit
 from data import MNISTOneStep
-from utils import plot_metrics
+from utils import plot_metrics, plot_predictions
 
 
 def create_train_state(rng_key, learning_rate):
@@ -87,6 +87,7 @@ def train():
             metrics = intrinsic_reward(ensemble_states, val_zeros, val_ones, metrics)
 
     plot_metrics(metrics, num_bootstraps)
+    plot_predictions(ensemble_states[i], batch)  # visualize the last batch
 
 
 if __name__ == "__main__":

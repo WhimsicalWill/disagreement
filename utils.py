@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import jax.numpy as jnp
 
 def plot_metrics(metrics, num_bootstraps):
     times = range(len(metrics["loss_b1"]))
@@ -33,5 +34,41 @@ def plot_metrics(metrics, num_bootstraps):
     plt.legend()
     
     plt.tight_layout()
+    plt.savefig('metrics.png')
     plt.show()
 
+def plot_predictions(state, batch):
+    """
+    Plots side-by-side comparisons of original digits and their predicted transformations.
+
+    Args:
+        state (train_state.TrainState): The training state containing the model parameters.
+        batch (jnp.array): A batch of input, target pairs of shape (B, 2, 28, 28)
+    """
+    inputs = batch[:, 0, :, :]
+    targets = batch[:, 1, :, :]
+    num_samples = batch.shape[0]
+
+    # Generate predictions
+    predictions = state.apply_fn({'params': state.params}, inputs)
+
+    fig, axs = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
+    for i in range(num_samples):
+        # Display input images
+        axs[0, i].imshow(inputs[i].reshape(28, 28), cmap='gray')
+        axs[0, i].axis('off')
+        axs[0, i].set_title('Original')
+
+        # Display target images
+        axs[1, i].imshow(targets[i].reshape(28, 28), cmap='gray')
+        axs[1, i].axis('off')
+        axs[1, i].set_title('Target')
+
+        # Display predictions
+        axs[2, i].imshow(predictions[i].reshape(28, 28), cmap='gray')
+        axs[2, i].axis('off')
+        axs[2, i].set_title('Prediction')
+
+    plt.tight_layout()
+    plt.savefig('predictions.png')
+    plt.show()
