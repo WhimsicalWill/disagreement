@@ -2,93 +2,71 @@ import jax
 import jax.numpy as jnp
 from flax.training import train_state
 import optax
-from torch.utils.data import DataLoader
 from tqdm import tqdm
-from model import DigitToDigit
-from data import MNISTOneStep
-import utils
+from nets import RSSM
+from dataset import load_moving_mnist
 
 
-def create_train_state(rng_key, learning_rate):
-    model = DigitToDigit(hidden_dim=128)
-    params = model.init(rng_key, jnp.ones([1, 28, 28]))['params']
-    tx = optax.adam(learning_rate)
-    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+sg = lambda x: jax.tree_util.tree_map(jax.lax.stop_gradient, x)
 
-def mse_loss(params, apply_fn, inputs, targets):
-    preds = apply_fn({'params': params}, inputs)
-    return jnp.mean((preds - targets) ** 2)
+@jax.vmap
+def mse(preds, targets):
+	return optax.squared_error(preds, targets)
 
-def train_step(ensemble_states, inputs, targets, metrics):
-    '''Runs a train step for each bootstrap in the ensemble on a given minibatch.'''
-    for i, state in enumerate(ensemble_states):
-        loss_fn = lambda params: mse_loss(params, state.apply_fn, inputs, targets)
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
-        grad_norm = jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)]))
-        metrics[f"loss_b{i+1}"].append(loss)
-        metrics[f"grad_norms_b{i+1}"].append(grad_norm)
-        ensemble_states[i] = state.apply_gradients(grads=grads)
-    return ensemble_states, metrics
+def train_step(rssm, params, videos, z_rng, config):
+	def loss_fn(params):
+		# prepare initial state and use model to predict output
+		batch_size = videos.shape[0]
+		deter = jnp.zeros((batch_size, config["DETER_DIM"]))
+		outs = rssm.apply({"params": params}, deter, videos, method=rssm.observe)
+		
+		# compute losses
+		mse_loss = mse(outs["recon_obs"], videos).mean()
+		return mse_loss
+		
+		# TODO: incorporate distribution losses and implement STE
+		# dyn = self._dist(sg(post)).kl_divergence(self._dist(prior))
+		# rep = self._dist(post).kl_divergence(self._dist(sg(prior)))
+		# dyn = jnp.maximum(dyn, config["FREE_BITS"])
+		# rep = jnp.maximum(rep, config["FREE_BITS"])
+		# kld_loss = dyn + config["KL_BALANCE"] * rep
+		# loss = mse_loss + config["BETA"] * kld_loss
+		# return loss
 
-def intrinsic_reward(ensemble_states, val_zeros, val_ones, metrics):
-    '''Computes the intrinsic reward using the ensemble on the validation dataset.
-    The reward is computed separately for the 0s and 1s.
-    The goal of this experiment is to show that this function is agnostic to
-    aleatoric uncertainty in the long run.
-    We do this by comparing the uncertainty in the 1 prediction (more entropy)
-    to the uncertainty in the 0 prediction (less entropy)
-    '''
-    batch_size = val_zeros.shape[0]
-    preds_zeros = jnp.zeros((len(ensemble_states), batch_size, 28, 28))
-    preds_ones = jnp.zeros((len(ensemble_states), batch_size, 28, 28))
-    for i, state in enumerate(ensemble_states):
-        preds_zeros = preds_zeros.at[i].set(state.apply_fn({'params': state.params}, val_zeros))
-        preds_ones = preds_ones.at[i].set(state.apply_fn({'params': state.params}, val_ones))
-    
-    # We take the variance across the bootstrap dimension, and then
-    # average it across the batch and the features in each prediction
-    ir_0 = jnp.mean(jnp.var(preds_zeros, axis=0))
-    ir_1 = jnp.mean(jnp.var(preds_ones, axis=0))
-    metrics["ir_0"].append(ir_0)
-    metrics["ir_1"].append(ir_1)
-    return metrics
+	grads = jax.grad(loss_fn)(params)
+	return grads
 
-def train():
-    dataset = MNISTOneStep()
-    data_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+def train_and_evaluate(config):
+	rng = jax.random.PRNGKey(0)
+	rng, init_rng, eval_rng = jax.random.split(rng, 3)
+	train_loader, test_loader = load_moving_mnist(config)
+	rssm = RSSM()
+	dummy_deter, dummy_obs = (
+		jnp.zeros((1, config["DETER_DIM"])),
+		jnp.zeros((1, 20, 64, 64, 1))  # (B, L, H, W, C)
+	)
+	params = rssm.init(init_rng, dummy_deter, dummy_obs, method=rssm.observe)["params"]
+	ts = train_state.TrainState.create(
+		apply_fn=rssm.apply,
+		params=params,
+		tx=optax.adam(config["LR"])
+	)
 
-    # Training Loop
-    num_epochs = 3
-    lr = 1e-3
-    num_bootstraps = 5
+	for epoch in tqdm(range(config["NUM_EPOCHS"]), desc="Epochs"):
+		for videos_start, videos_end in tqdm(train_loader, desc=f"Epoch {epoch + 1} Training"):
+			videos = jnp.concat([videos_start, videos_end], axis=1)  # (B, 20, 64, 64)
+			rng, z_rng = jax.random.split(rng)
+			grads = train_step(rssm, ts.params, videos, z_rng, config)
+			ts = ts.apply_gradients(grads=grads)
 
-    # Initialize ensemble of bootstraps
-    ensemble_states = [create_train_state(jax.random.PRNGKey(i), lr) for i in range(num_bootstraps)]
-    
-    # Use the first batch of the dataset for validation purposes
-    val_zeros, val_ones = dataset.validation_batch
-
-    # Loss and grad norms are tracked for each bootstrap separately
-    metrics = {
-        "ir_0": [],  # intrinsic rewards for digit 0 validation dataset
-        "ir_1": [],  # intrinsic rewards for digit 1 validation dataset
-    }
-    for i in range(num_bootstraps):
-        metrics[f"loss_b{i+1}"] = []
-        metrics[f"grad_norms_b{i+1}"] = []
-    pred_frames = []
-
-    for epoch in tqdm(range(num_epochs), desc='Epochs'):
-        for batch in tqdm(data_loader, desc='Batches', leave=False):
-            inputs = jnp.array(batch[:, 0, :, :])
-            targets = jnp.array(batch[:, 1, :, :])
-            ensemble_states, metrics = train_step(ensemble_states, inputs, targets, metrics)
-            metrics = intrinsic_reward(ensemble_states, val_zeros, val_ones, metrics)
-            pred_frames = utils.generate_pred_frame(ensemble_states, pred_frames, dataset.random_batch)
-
-    utils.plot_metrics(metrics, num_bootstraps)
-    utils.make_video(pred_frames)
-
+		# TODO: save videos and print metrics after each epoch
 
 if __name__ == "__main__":
-    train()
+	config = {
+		"NUM_EPOCHS": 10,
+		"LR": 1e-3,
+		"BETA": 0.001,
+		"BATCH_SIZE": 1,
+		"DETER_DIM": 2048,
+	}
+	train_and_evaluate(config)
