@@ -1,7 +1,24 @@
 import matplotlib.pyplot as plt
+import jax
 import jax.numpy as jnp
 import numpy as np
-from moviepy.editor import ImageSequenceClip
+import distrax
+
+
+treemap = jax.tree_util.tree_map
+sg = lambda x: treemap(jax.lax.stop_gradient, x)
+
+
+class OneHotDist(distrax.OneHotCategorical):
+
+    def __init__(self, logits=None, probs=None):
+        super().__init__(logits, probs)
+
+    def sample(self, sample_shape=(), seed=None):
+        sample = super().sample(sample_shape=sample_shape, seed=seed)
+        # Straight-through estimator for sampling
+        sample = sg(sample) + (self.probs - sg(self.probs))
+        return sample
 
 
 def plot_metrics(metrics, num_bootstraps):
@@ -106,14 +123,3 @@ def generate_pred_frame(ensemble_states, pred_frames, batch):
     # Append the frame to the list of prediction frames
     pred_frames.append(frame)
     return pred_frames
-
-def make_video(pred_frames, filename='training_video.mp4', fps=10):
-    def transform_frame(frame):
-        frame = np.uint8((frame + 1) * (255 / 2))
-        color_frame = np.stack((frame,)*3, axis=-1)  # (H, W, C)
-        return color_frame
-
-    # Ensure frames are in the correct format (HxWx3) and dtype (uint8)
-    pred_frames = [transform_frame(frame) for frame in pred_frames]
-    clip = ImageSequenceClip(pred_frames, fps=fps)
-    clip.write_videofile(filename, codec='libx264')

@@ -1,23 +1,7 @@
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-import distrax
-
-
-treemap = jax.tree_util.tree_map
-sg = lambda x: treemap(jax.lax.stop_gradient, x)
-
-
-class OneHotDist(distrax.OneHotCategorical):
-
-    def __init__(self, logits=None, probs=None):
-        super().__init__(logits, probs)
-
-    def sample(self, sample_shape=(), seed=None):
-        sample = super().sample(sample_shape=sample_shape, seed=seed)
-        # Straight-through estimator for sampling
-        sample = sg(sample) + (self.probs - sg(self.probs))
-        return sample
+from utils import OneHotDist
 
 
 class Encoder(nn.Module):
@@ -108,12 +92,15 @@ class RSSM(nn.Module):
 		)
 
 	def observe(self, deter, obs):
-		_, outs = self.post_scan(deter, obs)
-		return outs
+		deter, outs = self.post_scan(deter, obs)
+		return deter, outs
 
-	def imagine(self, deter):
-		_, outs = self.prior_scan(deter)
-		return outs
+	def imagine(self, deter, length):
+		# Forming a dummy input is a workaround for dynamic length in open-loop prediction
+		batch_size = deter.shape[0]
+		dummy_input = jnp.zeros((batch_size, length))
+		deter, outs = self.prior_scan(deter, dummy_input)
+		return deter, outs
 
 
 class Prior(nn.Module):
@@ -135,7 +122,7 @@ class PriorCell(nn.Module):
 	gru: nn.Module
 	prior: nn.Module
 
-	def __call__(self, deter):
+	def __call__(self, deter, dummy_input):
 		# predict the prior so we can compute the intrinsic reward
 		prior_logits = self.prior(deter)
 		# sample from the posterior to get stoch state
