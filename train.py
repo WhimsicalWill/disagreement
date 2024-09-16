@@ -9,6 +9,7 @@ from dataset import load_moving_mnist
 from itertools import islice
 from utils import OneHotDist, make_video_comparison, save_video
 
+jax.config.update('jax_disable_jit', True)
 sg = lambda x: jax.tree_util.tree_map(jax.lax.stop_gradient, x)
 
 
@@ -86,7 +87,8 @@ def eval_f(rssm, params, test_loader, rng, config):
 
 	# We can create the rng streams for the prior and post here (I think)
 	# Each module (Post and Prior) maintains its own stream of different rngs
-	jit_eval_model = jax.jit(nn.apply(eval_model, rssm))
+	# jit_eval_model = jax.jit(nn.apply(eval_model, rssm))
+	jit_eval_model = nn.apply(eval_model, rssm)
 	return jit_eval_model({'params': params}, rngs={'sample': rng})
 
 
@@ -123,7 +125,7 @@ if __name__ == '__main__':
 		'NUM_EPOCHS': 10,
 		'LR': 1e-3,
 		'BETA': 1,
-		'BATCH_SIZE': 12,
+		'BATCH_SIZE': 16,
 		'DETER_DIM': 2048,
 		'KL_BALANCE': 1,
 		'FREE_BITS': 1,

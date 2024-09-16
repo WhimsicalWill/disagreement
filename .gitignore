@@ -1,4 +1,5 @@
 data
+viz
 **/__pycache__
 **/*.pyc
 **/*.png

@@ -72,11 +72,13 @@ class MovingMNIST(data.Dataset):
 
         # need to iterate over time
         def _transform_time(data):
-            new_data = None
+            """Applies the provided transform to each timestep of the video."""
+            new_data = []
             for i in range(data.size(0)):
                 img = Image.fromarray(data[i].numpy(), mode='L')
-                new_data = self.transform(img) if new_data is None else torch.cat([self.transform(img), new_data], dim=0)
-            return new_data
+                transformed_img = self.transform(img) if self.transform else img
+                new_data.append(transformed_img)
+            return torch.cat(new_data, dim=0)  # Concatenate along the time axis
 
         if self.train:
             seq, target = self.train_data[index, :10], self.train_data[index, 10:]
