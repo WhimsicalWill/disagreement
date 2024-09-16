@@ -1,9 +1,10 @@
+import os
 import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
 import numpy as np
 import distrax
-
+import cv2
 
 treemap = jax.tree_util.tree_map
 sg = lambda x: treemap(jax.lax.stop_gradient, x)
@@ -21,105 +22,78 @@ class OneHotDist(distrax.OneHotCategorical):
         return sample
 
 
-def plot_metrics(metrics, num_bootstraps):
-    times = range(len(metrics["loss_b1"]))
-    
-    # 1. Plot for loss across different bootstraps
-    plt.figure(figsize=(18, 6))
-    
-    plt.subplot(1, 3, 1)
-    for i in range(1, num_bootstraps + 1):
-        plt.plot(times, metrics[f"loss_b{i}"], label=f'Bootstrap {i}')
-    plt.title('Loss per Bootstrap')
-    plt.xlabel('Time')
-    plt.ylabel('Loss')
-    plt.legend()
-    
-    # 2. Plot for gradient norms across different bootstraps
-    plt.subplot(1, 3, 2)
-    for i in range(1, num_bootstraps + 1):
-        plt.plot(times, metrics[f"grad_norms_b{i}"], label=f'Gradient Norms Bootstrap {i}')
-    plt.title('Gradient Norms per Bootstrap')
-    plt.xlabel('Time')
-    plt.ylabel('Gradient Norm')
-    plt.legend()
-    
-    # 3. Plot for intrinsic reward for different digit prediction types
-    plt.subplot(1, 3, 3)
-    plt.plot(times, metrics["ir_0"], label='Intrinsic Reward for 0s')
-    plt.plot(times, metrics["ir_1"], label='Intrinsic Reward for 1s')
-    plt.title('Intrinsic Reward per Digit Type')
-    plt.xlabel('Time')
-    plt.ylabel('Intrinsic Reward')
-    plt.legend()
-    
-    plt.tight_layout()
-    plt.savefig('metrics.png')
-    plt.show()
+def make_video_comparison(videos_start, videos_end, pred_start, pred_end, config):
+    '''
+    Creates a video grid to compare the data and its reconstructions. The grid
+    is of size (2, B) and each cell contains a video. The top row is the actual
+    data and the bottom row is the reconstructions.
 
-def plot_predictions(state, batch):
-    """
-    Plots side-by-side comparisons of original digits and their predicted transformations.
+	Args:
+		videos_start (jnp.array): The first 10 frames of the video data (B, 10, 64, 64, 1)
+		videos_end (jnp.array): The last 10 frames of the video data (B, 10, 64, 64, 1)
+		pred_start (jnp.array): The first 10 frames reconstructed by the posterior (B, 10, 64, 64, 1)
+		pred_end (jnp.array): The last 10 frames predicted by the prior (B, 10, 64, 64, 1)
+        config: The config
+	Returns:
+		jnp.ndarray: An ndarray containing the video data
+    '''
+    # Slice the input data to only consider the first K samples of the minibatch
+    videos_start, videos_end, pred_start, pred_end = (
+        videos_start[:config['COMPARISON_SAMPLES']],
+        videos_end[:config['COMPARISON_SAMPLES']],
+        pred_start[:config['COMPARISON_SAMPLES']],
+        pred_end[:config['COMPARISON_SAMPLES']]
+    )
 
-    Args:
-        state (train_state.TrainState): The training state containing the model parameters.
-        batch (jnp.array): A batch of input, target pairs of shape (B, 2, 28, 28)
-    """
-    inputs = batch[:, 0, :, :]
-    targets = batch[:, 1, :, :]
-    num_samples = batch.shape[0]
-
-    # Generate predictions
-    predictions = state.apply_fn({'params': state.params}, inputs)
-
-    fig, axs = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
-    for i in range(num_samples):
-        # Display input images
-        axs[0, i].imshow(inputs[i].reshape(28, 28), cmap='gray')
-        axs[0, i].axis('off')
-        axs[0, i].set_title('Original')
-
-        # Display target images
-        axs[1, i].imshow(targets[i].reshape(28, 28), cmap='gray')
-        axs[1, i].axis('off')
-        axs[1, i].set_title('Target')
-
-        # Display predictions
-        axs[2, i].imshow(predictions[i].reshape(28, 28), cmap='gray')
-        axs[2, i].axis('off')
-        axs[2, i].set_title('Prediction')
-
-    plt.tight_layout()
-    plt.savefig('predictions.png')
-    plt.show()
-
-def generate_pred_frame(ensemble_states, pred_frames, batch):
-    S = 28
-    batch_size = batch.shape[0]
+    # Concatenate start and end to form the full ground truth and predictions
+    true_video = jnp.concatenate([videos_start, videos_end], axis=1)  # shape (K, 20, 64, 64, 1)
+    pred_video = jnp.concatenate([pred_start, pred_end], axis=1)  # shape (K, 20, 64, 64, 1)
     
-    # Extract input and target images from the batch
-    inputs = jnp.array(batch[:, 0, :, :])
-    targets = jnp.array(batch[:, 1, :, :])
+    # Create a grid of 2 rows and K columns, each cell is a video of shape (20, 64, 64, 1)
+    num_samples = true_video.shape[0]
+    grid = jnp.stack([true_video, pred_video])  # (2, K, 20, 64, 64, 1)
+
+    # Convert the grid to (T, H, W) where T is the number of time steps, H the height, and W the width
+    # We need to stack the videos into a grid format
+    T = 20  # Number of frames
+    H = 64 * 2  # 2 rows: ground truth on top, prediction on bottom
+    W = 64 * num_samples  # K columns for K samples
     
-    num_bootstraps = len(ensemble_states)
-    frame_width = S * (2 + num_bootstraps)  # Two columns for input and target, plus one for each bootstrap
-    frame_height = S * batch_size
+    video_frames = jnp.zeros((T, H, W), dtype=jnp.uint8)
     
-    # Create an empty frame with specified dimensions
-    frame = np.zeros((frame_height, frame_width))
+    for t in range(T):
+        for row in range(2):  # ground truth and prediction
+            for col in range(num_samples):  # for each sample
+                # Extract a frame from the input to be used as a cell in the video grid
+                cell = grid[row, col, t].squeeze()  # (64, 64)
+                # Place it in the correct location in the grid
+                video_frames = (video_frames
+                    .at[t, row * 64:(row + 1) * 64, col * 64:(col + 1) * 64]
+                    .set((cell * 255).astype(jnp.uint8))
+                )
+
+    return video_frames
+
+
+def save_video(video, filename):
+    '''
+    Writes data to an mp4 video file.
+
+	Args:
+		video (jnp.array): The video data of shape (T, H, W)
+		filename (str): The filename to write the video to
+    '''
+    if not os.path.exists('viz'):
+        os.makedirs('viz')
+    filepath = os.path.join('viz', filename)
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    FPS = 2.0
+    height, width = video.shape[1:]
+    video_writer = cv2.VideoWriter(filepath, fourcc, FPS, (width, height), isColor=False)
+    video_np = np.array(video)
+
+    for frame in video_np:
+        video_writer.write(frame)
     
-    # Place inputs and targets in their respective columns in the frame
-    frame[:, 0:S] = inputs.reshape(frame_height, S)
-    frame[:, S:2*S] = targets.reshape(frame_height, S)
-    
-    # Generate and insert predictions for each bootstrap
-    current_column = 2 * S
-    for state in ensemble_states:
-        preds = state.apply_fn({'params': state.params}, inputs)
-        preds_flat = preds.reshape(-1)  # Flatten the predictions
-        frame[:, current_column:current_column+S] = preds_flat.reshape(frame_height, S)
-        current_column += S
-    
-    # Append the frame to the list of prediction frames
-    pred_frames.append(frame)
-    return pred_frames
+    video_writer.release()

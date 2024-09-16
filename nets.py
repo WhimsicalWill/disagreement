@@ -69,7 +69,7 @@ class RSSM(nn.Module):
 			variable_broadcast='params',
 			in_axes=1,
 			out_axes=1,
-			split_rngs={'params': False}
+			split_rngs={'params': False, 'sample': True}
 		)(
 			self.decoder,
 			self.gru,
@@ -82,7 +82,7 @@ class RSSM(nn.Module):
 			variable_broadcast='params',
 			in_axes=1,
 			out_axes=1,
-			split_rngs={'params': False}
+			split_rngs={'params': False, 'sample': True}
 		)(
 			self.encoder,
 			self.decoder,
@@ -127,7 +127,7 @@ class PriorCell(nn.Module):
 		prior_logits = self.prior(deter)
 		# sample from the posterior to get stoch state
 		# TODO: gracefully supply different rng for each iteration of the scan
-		stoch = OneHotDist(prior_logits).sample(seed=jax.random.PRNGKey(0))
+		stoch = OneHotDist(prior_logits).sample(seed=self.make_rng('sample'))
 		stoch = stoch.reshape((stoch.shape[0], -1))
 		# reconstruct the obs using compact state
 		recon_obs = self.decoder(deter, stoch)
@@ -184,7 +184,7 @@ class PostCell(nn.Module):
 		post_logits = self.posterior(deter, embed)
 		# sample from the posterior to get stoch state
 		# TODO: gracefully supply different rng for each iteration of the scan
-		stoch = OneHotDist(post_logits).sample(seed=jax.random.PRNGKey(0))
+		stoch = OneHotDist(post_logits).sample(seed=self.make_rng('sample'))
 		stoch = stoch.reshape((stoch.shape[0], -1))
 		# reconstruct the obs using compact state
 		recon_obs = self.decoder(deter, stoch)
